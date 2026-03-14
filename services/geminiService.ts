@@ -1,6 +1,8 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { UserProfile, JobAnalysisResult, GeneratedContent, JobSearchResult } from "../types";
 
+// Always use the named parameter for apiKey initialization
 const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const getSystemInstruction = (profile: UserProfile) => `
@@ -25,17 +27,21 @@ export const parseResume = async (fileBase64: string, mimeType: string): Promise
     - logistics: Extract location, license info (if any), and citizenship (if any).
   `;
 
+  // Fix: use gemini-3-flash-preview as per guidelines for basic text tasks
+  // Fix: use contents: { parts: [...] } for multi-part content
   const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
-    contents: [
-      {
-        inlineData: {
-          mimeType: mimeType,
-          data: fileBase64
-        }
-      },
-      { text: prompt }
-    ],
+    model: 'gemini-3-flash-preview',
+    contents: {
+      parts: [
+        {
+          inlineData: {
+            mimeType: mimeType,
+            data: fileBase64
+          }
+        },
+        { text: prompt }
+      ]
+    },
     config: {
       responseMimeType: "application/json",
       responseSchema: {
@@ -89,8 +95,9 @@ export const analyzeJobFit = async (jobDescription: string, userProfile: UserPro
     6. recommendedAction (Apply, Network, or Skip)
   `;
 
+  // Fix: use gemini-3-flash-preview as per guidelines
   const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
+    model: 'gemini-3-flash-preview',
     contents: prompt,
     config: {
       systemInstruction: getSystemInstruction(userProfile),
@@ -130,8 +137,9 @@ export const generateApplicationMaterials = async (jobDescription: string, userP
     ${JSON.stringify(userProfile)}
   `;
 
+  // Fix: use gemini-3-flash-preview as per guidelines
   const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
+    model: 'gemini-3-flash-preview',
     contents: prompt,
     config: {
       systemInstruction: getSystemInstruction(userProfile),
@@ -161,17 +169,18 @@ export const generateApplicationMaterials = async (jobDescription: string, userP
   return JSON.parse(text) as GeneratedContent;
 };
 
-export const findRelevantJobs = async (userProfile: UserProfile): Promise<JobSearchResult[]> => {
+export const findRelevantJobs = async (userProfile: UserProfile, dateCriteria: string = 'recently'): Promise<JobSearchResult[]> => {
   const ai = getAI();
   
   // Dynamic search prompt based on user profile
   const roles = userProfile.targetRoles.slice(0, 3).join(" or ");
   const location = userProfile.logistics.location || userProfile.location;
   
-  const searchPrompt = `Find 5 recent, active job postings for ${roles} positions in ${location}. Focus on senior/executive roles matching 10+ years experience.`;
+  const searchPrompt = `Find 5 recent, active job postings for ${roles} positions in ${location} that were posted ${dateCriteria}. Focus on senior/executive roles matching 10+ years experience.`;
   
+  // Fix: use gemini-3-flash-preview as per guidelines for text tasks with tools
   const searchResponse = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
+    model: 'gemini-3-flash-preview',
     contents: searchPrompt,
     config: {
       tools: [{ googleSearch: {} }]
@@ -183,14 +192,15 @@ export const findRelevantJobs = async (userProfile: UserProfile): Promise<JobSea
 
   const extractPrompt = `
     Extract job listings from the following text into a structured JSON array.
-    For each job, provide a title, company, location, and a detailed description/summary based on the text.
+    For each job, provide a title, company, location, a detailed description/summary, and the direct URL to the job posting if available in the text or grounding metadata.
     
     TEXT TO PROCESS:
     ${rawSearchText}
   `;
 
+  // Fix: use gemini-3-flash-preview as per guidelines
   const extractResponse = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
+    model: 'gemini-3-flash-preview',
     contents: extractPrompt,
     config: {
       responseMimeType: "application/json",
@@ -203,7 +213,9 @@ export const findRelevantJobs = async (userProfile: UserProfile): Promise<JobSea
             company: { type: Type.STRING },
             location: { type: Type.STRING },
             description: { type: Type.STRING },
-          }
+            url: { type: Type.STRING, description: "The direct link to the job post" }
+          },
+          required: ['title', 'company', 'location', 'description']
         }
       }
     }
@@ -220,7 +232,7 @@ export const findRelevantJobs = async (userProfile: UserProfile): Promise<JobSea
     company: job.company,
     location: job.location,
     description: job.description,
-    url: groundingChunks[index]?.web?.uri || '#', 
+    url: job.url || groundingChunks[index]?.web?.uri || '#', 
     status: 'pending'
   }));
 };
