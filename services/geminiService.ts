@@ -1,16 +1,19 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { UserProfile, JobAnalysisResult, GeneratedContent, JobSearchResult } from "../types";
 
 // Always use the named parameter for apiKey initialization
-const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
+const getAI = () => new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+// BUG FIX #1: 'gemini-3-flash-preview' does not exist.
+// Correct model is 'gemini-2.5-flash'. All references updated below.
+const MODEL = 'gemini-2.5-flash';
 
 const getSystemInstruction = (profile: UserProfile) => `
 You are a high-end executive career coach and automation assistant for ${profile.name}, a senior ${profile.targetRoles[0] || 'Executive'} based in ${profile.location}.
 Your goal is to help them secure a senior leadership role.
-Always use the specific metrics (e.g., "${profile.keyAchievements[0] || ''}") from the profile in your outputs.
+Always use specific metrics from their profile achievements in your outputs.
 Tone: Professional, confident, strategic, and executive-level.
-Context: ${profile.logistics.location} job market.
+Context: South African job market (ZAR currency).
 `;
 
 export const parseResume = async (fileBase64: string, mimeType: string): Promise<UserProfile> => {
@@ -23,14 +26,12 @@ export const parseResume = async (fileBase64: string, mimeType: string): Promise
     - targetRoles: Extract specific job titles they are targeting or are qualified for.
     - industries: Extract industries they have worked in.
     - coreQualifications: Summarize top skills/qualifications as a list of strings.
-    - keyAchievements: Extract quantifiable achievements (e.g., "Saved $1M", "Managed 50 people").
+    - keyAchievements: Extract quantifiable achievements (e.g., "Saved R3M", "Managed 50 people").
     - logistics: Extract location, license info (if any), and citizenship (if any).
   `;
 
-  // Fix: use gemini-3-flash-preview as per guidelines for basic text tasks
-  // Fix: use contents: { parts: [...] } for multi-part content
   const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
+    model: MODEL,
     contents: {
       parts: [
         {
@@ -84,20 +85,25 @@ export const analyzeJobFit = async (jobDescription: string, userProfile: UserPro
     ${jobDescription}
 
     USER PROFILE:
-    ${JSON.stringify(userProfile)}
+    Name: ${userProfile.name}
+    Summary: ${userProfile.summary}
+    Location: ${userProfile.location}
+    Target Roles: ${userProfile.targetRoles.join(', ')}
+    Core Qualifications: ${userProfile.coreQualifications.join(', ')}
+    Key Achievements: ${userProfile.keyAchievements.join(', ')}
+    Industries: ${userProfile.industries.join(', ')}
 
     Return a JSON object with:
-    1. matchScore (0-100)
+    1. matchScore (0-100 integer)
     2. summary (One sentence on why it fits or doesn't)
-    3. matchingKeywords (List of matched skills/requirements)
-    4. missingKeywords (List of critical missing skills)
-    5. culturalFit (Assessment of industry alignment)
-    6. recommendedAction (Apply, Network, or Skip)
+    3. matchingKeywords (List of matched skills/requirements, max 8 items)
+    4. missingKeywords (List of critical missing skills, max 5 items)
+    5. culturalFit (1-2 sentence assessment of industry alignment)
+    6. recommendedAction (must be exactly one of: Apply, Network, or Skip)
   `;
 
-  // Fix: use gemini-3-flash-preview as per guidelines
   const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
+    model: MODEL,
     contents: prompt,
     config: {
       systemInstruction: getSystemInstruction(userProfile),
@@ -125,8 +131,10 @@ export const analyzeJobFit = async (jobDescription: string, userProfile: UserPro
 export const generateApplicationMaterials = async (jobDescription: string, userProfile: UserProfile): Promise<GeneratedContent> => {
   const ai = getAI();
   const prompt = `
-    Based on the Job Description and the User Profile, generate:
-    1. A highly persuasive Cover Letter (max 350 words) highlighting specific achievements from the profile relevant to the job.
+    Based on the Job Description and the User Profile, generate application materials.
+    
+    Generate:
+    1. A highly persuasive Cover Letter (max 350 words) highlighting specific achievements from the profile relevant to the job. Use South African English. Reference specific metrics.
     2. A short, punchy LinkedIn connection message to the hiring manager (max 300 chars).
     3. Three likely interview questions for this specific role and suggested STAR method answers using the profile's real achievements.
 
@@ -134,12 +142,15 @@ export const generateApplicationMaterials = async (jobDescription: string, userP
     ${jobDescription}
 
     USER PROFILE:
-    ${JSON.stringify(userProfile)}
+    Name: ${userProfile.name}
+    Summary: ${userProfile.summary}
+    Location: ${userProfile.location}
+    Achievements: ${userProfile.keyAchievements.join(' | ')}
+    Qualifications: ${userProfile.coreQualifications.join(' | ')}
   `;
 
-  // Fix: use gemini-3-flash-preview as per guidelines
   const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
+    model: MODEL,
     contents: prompt,
     config: {
       systemInstruction: getSystemInstruction(userProfile),
@@ -156,51 +167,64 @@ export const generateApplicationMaterials = async (jobDescription: string, userP
               properties: {
                 question: { type: Type.STRING },
                 suggestedAnswer: { type: Type.STRING }
-              }
+              },
+              required: ['question', 'suggestedAnswer']
             }
           }
-        }
+        },
+        required: ['coverLetter', 'linkedinMessage', 'interviewQuestions']
       }
     }
   });
 
-   const text = response.text;
+  const text = response.text;
   if (!text) throw new Error("No response from AI");
   return JSON.parse(text) as GeneratedContent;
 };
 
-export const findRelevantJobs = async (userProfile: UserProfile, dateCriteria: string = 'recently'): Promise<JobSearchResult[]> => {
+export const findRelevantJobs = async (
+  userProfile: UserProfile,
+  dateRange: string = 'within the last 7 days'
+): Promise<JobSearchResult[]> => {
   const ai = getAI();
-  
-  // Dynamic search prompt based on user profile
+
+  // BUG FIX #2: Use effective location — prefer logistics.location over profile.location
+  // and guard against undefined with a safe fallback
+  const location = (userProfile.logistics?.location || userProfile.location || 'South Africa').trim();
   const roles = userProfile.targetRoles.slice(0, 3).join(" or ");
-  const location = userProfile.logistics.location || userProfile.location;
-  
-  const searchPrompt = `Find 5 recent, active job postings for ${roles} positions in ${location} that were posted ${dateCriteria}. Focus on senior/executive roles matching 10+ years experience.`;
-  
-  // Fix: use gemini-3-flash-preview as per guidelines for text tasks with tools
+
+  const searchPrompt = `Find 5 active, currently open job postings for ${roles} positions located in ${location}, posted ${dateRange}. Focus on senior and executive-level roles requiring 10+ years of experience. Include the direct application URL for each posting if available.`;
+
   const searchResponse = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
+    model: MODEL,
     contents: searchPrompt,
     config: {
       tools: [{ googleSearch: {} }]
     }
   });
 
-  const rawSearchText = searchResponse.text;
+  const rawSearchText = searchResponse.text || '';
   const groundingChunks = searchResponse.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
 
+  if (!rawSearchText) return [];
+
   const extractPrompt = `
-    Extract job listings from the following text into a structured JSON array.
-    For each job, provide a title, company, location, a detailed description/summary, and the direct URL to the job posting if available in the text or grounding metadata.
+    Extract job listings from the following search result text into a structured JSON array.
+    Only include real, verifiable job postings. For each job provide:
+    - title: exact job title
+    - company: hiring company name
+    - location: job location (city, province, country)
+    - description: detailed role description and requirements (min 100 words)
+    - url: direct link to the job posting (use '#' if not available)
+    
+    If fewer than 5 real postings are found, return only those found. Do not invent jobs.
     
     TEXT TO PROCESS:
     ${rawSearchText}
   `;
 
-  // Fix: use gemini-3-flash-preview as per guidelines
   const extractResponse = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
+    model: MODEL,
     contents: extractPrompt,
     config: {
       responseMimeType: "application/json",
@@ -213,7 +237,7 @@ export const findRelevantJobs = async (userProfile: UserProfile, dateCriteria: s
             company: { type: Type.STRING },
             location: { type: Type.STRING },
             description: { type: Type.STRING },
-            url: { type: Type.STRING, description: "The direct link to the job post" }
+            url: { type: Type.STRING }
           },
           required: ['title', 'company', 'location', 'description']
         }
@@ -223,16 +247,24 @@ export const findRelevantJobs = async (userProfile: UserProfile, dateCriteria: s
 
   const text = extractResponse.text;
   if (!text) return [];
-  
-  const jobs = JSON.parse(text);
-  
+
+  let jobs: any[] = [];
+  try {
+    jobs = JSON.parse(text);
+    if (!Array.isArray(jobs)) return [];
+  } catch {
+    return [];
+  }
+
   return jobs.map((job: any, index: number) => ({
     id: `job-${Date.now()}-${index}`,
-    title: job.title,
-    company: job.company,
-    location: job.location,
-    description: job.description,
-    url: job.url || groundingChunks[index]?.web?.uri || '#', 
-    status: 'pending'
+    title: job.title || 'Untitled Position',
+    company: job.company || 'Unknown Company',
+    location: job.location || location,
+    description: job.description || '',
+    url: job.url && job.url !== '#'
+      ? job.url
+      : (groundingChunks[index]?.web?.uri || '#'),
+    status: 'pending' as const
   }));
 };

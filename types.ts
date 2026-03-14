@@ -47,6 +47,5 @@ export interface JobSearchResult {
 export enum AppView {
   DASHBOARD = 'DASHBOARD',
   JOB_ANALYZER = 'JOB_ANALYZER',
-  AUTO_PILOT = 'AUTO_PILOT',
-  INTERVIEW_PREP = 'INTERVIEW_PREP'
+  AUTO_PILOT = 'AUTO_PILOT'
 }

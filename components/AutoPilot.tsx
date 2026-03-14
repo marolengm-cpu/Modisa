@@ -36,9 +36,9 @@ export const AutoPilot: React.FC<AutoPilotProps> = ({ userProfile }) => {
   // 4-Tier Hierarchical State
   const [geo, setGeo] = useState({
     country: "South Africa",
-    division: "Gauteng",
-    city: "Pretoria",
-    town: "Erasmuskloof",
+    division: "Western Cape",
+    city: "George",
+    town: "George Central",
     customCountry: "",
     customDivision: "",
     customCity: "",
